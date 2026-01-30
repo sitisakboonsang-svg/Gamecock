@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>สนามเทพประทาน - ระบบจัดการสนาม (Card View Update)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBm6421FURfU_MSFYBe_d4_6h6VJa7v3R4",
+            authDomain: "gamecock-54c59.firebaseapp.com",
+            projectId: "gamecock-54c59",
+            storageBucket: "gamecock-54c59.firebasestorage.app",
+            messagingSenderId: "69664252611",
+            appId: "1:69664252611:web:195185918bda46d4d83876",
+            measurementId: "G-FR7BKF4B3T"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'gamecock-54c59-main';
+        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'global', 'current_state');
+
+        let isInitialized = false;
+
+        const signInWithRetry = async (retries = 5, delay = 1000) => {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    await signInAnonymously(auth);
+                    console.log("Firebase Authenticated");
+                    return;
+                } catch (error) {
+                    if (i === retries - 1) {
+                        window.notify("❌ การเชื่อมต่อล้มเหลว: โปรดเปิดใช้งาน 'Anonymous Auth' ใน Firebase");
+                    }
+                    await new Promise(res => setTimeout(res, delay));
+                    delay *= 2;
+                }
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            if (user && !isInitialized) {
+                isInitialized = true;
+                onSnapshot(docRef, (snapshot) => {
+                    if (snapshot.exists()) {
+                        window.updateLocalData(snapshot.data());
+                    }
+                }, (error) => {
+                    if (error.code === 'permission-denied') {
+                        window.notify("⚠️ โปรดตรวจสอบกฎการเข้าถึง (Rules) ใน Firestore");
+                    }
+                });
+            }
+        });
+
+        window.saveToCloud = async (data) => {
+            if (!auth.currentUser) return;
+            try {
+                const payload = JSON.parse(JSON.stringify({
+                    stadiums: data.stadiums,
+                    globalHistory: data.globalHistory,
+                    lastUpdated: Date.now()
+                }));
+                await setDoc(docRef, payload);
+            } catch (e) { console.error("Save failed:", e); }
+        };
+
+        window.onload = () => {
+            signInWithRetry();
+            window.tick();
+        };
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600;800&display=swap');
+        body { font-family: 'Kanit', sans-serif; }
+        .glow-gold { box-shadow: 0 0 25px rgba(217, 119, 6, 0.3); }
+        .cock-bg {
+            background-color: #0c0a09;
+            background-image: radial-gradient(#262626 1px, transparent 1px);
+            background-size: 30px 30px;
+        }
+        .bet-gradient {
+            background: linear-gradient(90deg, #fbbf24, #fffbeb, #fbbf24);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .img-container {
+            width: 140px; height: 140px; overflow: hidden;
+            display: flex; align-items: center; justify-content: center;
+            position: relative; background-color: #1c1917;
+        }
+        .img-container img { width: 100%; height: 100%; object-fit: cover; }
+        .admin-only { display: none !important; }
+        .logged-in .admin-only { display: block !important; }
+        .logged-in .visitor-only { display: none !important; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #171717; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #fbbf24; border-radius: 10px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .photo-preview {
+            width: 60px; height: 60px; border-radius: 12px; border: 2px dashed #444;
+            display: flex; align-items: center; justify-content: center; cursor: pointer;
+            overflow: hidden; background-size: cover; background-position: center; transition: all 0.3s;
+        }
+        .status-live { background: #dc2626; color: white; animation: pulse-red 2s infinite; }
+        @keyframes pulse-red { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        .sortable-ghost { opacity: 0.3; background: #fbbf24 !important; }
+        .drag-handle { cursor: grab; padding: 10px; color: #444; display: none; }
+        .logged-in .drag-handle { display: block; }
+        .modal-blur { backdrop-filter: blur(8px); }
+    </style>
+</head>
+<body class="cock-bg text-stone-200 min-h-screen">
+
+    <!-- Overlay login, reset, etc (Keep from previous version) -->
+    <div id="login-overlay" class="fixed inset-0 z-[200] bg-black/95 flex items-center justify-center modal-blur p-4 hidden">
+        <div class="bg-stone-900 w-full max-w-sm p-8 rounded-[2rem] border border-amber-500/30 shadow-2xl text-center">
+            <h2 class="text-2xl font-black text-amber-500 uppercase tracking-widest mb-6">Admin Access</h2>
+            <input type="password" id="admin-password" placeholder="รหัสผ่าน" class="w-full bg-stone-800 border border-stone-700 rounded-2xl px-4 py-4 text-center text-3xl tracking-[0.5em] outline-none text-white mb-4">
+            <button onclick="checkPassword()" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-black py-4 rounded-2xl text-xl">ยืนยัน</button>
+            <button onclick="hideLogin()" class="w-full text-stone-500 text-sm mt-4">ยกเลิก</button>
+        </div>
+    </div>
+
+    <div class="container mx-auto px-4 py-6 max-w-7xl">
+        <header class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4 bg-stone-900/60 p-6 rounded-[2.5rem] border border-stone-800 shadow-xl">
+            <div>
+                <h1 class="text-4xl font-black text-amber-500 uppercase tracking-tighter italic">สนาม<span class="text-white ml-2">เทพประทาน</span></h1>
+                <div id="current-date" class="text-stone-500 text-sm font-medium mt-1">---</div>
+            </div>
+            <div class="flex flex-wrap justify-center items-center gap-3">
+                <button onclick="showAllQueues()" class="bg-amber-500 text-black px-6 py-2.5 rounded-full text-sm font-black border border-amber-400">📋 รายการวันนี้</button>
+                <button onclick="showLogin()" class="visitor-only bg-stone-800 text-amber-500 px-8 py-2.5 rounded-full text-sm font-black border border-stone-700">ADMIN LOGIN</button>
+                <div class="admin-only flex items-center gap-3">
+                    <button onclick="showReset()" class="bg-red-600/20 text-red-500 border border-red-600/30 px-5 py-2.5 rounded-full text-xs font-black">🗑️ ล้างข้อมูล</button>
+                    <button onclick="logout()" class="text-stone-500 text-xs uppercase font-black ml-4">Logout</button>
+                </div>
+            </div>
+        </header>
+
+        <div class="flex overflow-x-auto pb-4 gap-3 no-scrollbar mb-8" id="stadium-tabs"></div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Main Display Area -->
+            <div class="lg:col-span-2 space-y-6">
+                <section class="bg-stone-900 rounded-[3rem] p-8 border-2 border-amber-600/30 glow-gold relative overflow-hidden shadow-2xl">
+                    <div class="flex justify-between items-start mb-10">
+                        <div class="flex flex-col">
+                            <span id="current-stadium-label" class="text-3xl font-black text-white italic tracking-tighter mb-1 uppercase">สังเวียน 1</span>
+                            <div class="flex items-center gap-2 mt-1">
+                                <span class="text-[10px] text-stone-600 font-mono tracking-widest uppercase" id="current-match-id">READY</span>
+                                <span id="status-badge" class="hidden px-3 py-1 rounded-full text-[10px] font-black uppercase"></span>
+                            </div>
+                        </div>
+                        <div id="live-stream-area" class="hidden">
+                             <a id="live-stream-link" href="#" target="_blank" class="bg-red-600 hover:bg-red-500 text-white px-6 py-3 rounded-2xl text-sm font-black flex items-center gap-2 transition-all animate-pulse">📺 รับชมสด</a>
+                        </div>
+                    </div>
+                    
+                    <div class="flex flex-col md:flex-row items-center justify-between gap-12 relative z-10 mb-8">
+                        <div class="text-center w-full md:w-5/12">
+                            <div class="img-container mx-auto bg-red-950 rounded-[2.5rem] border-4 border-red-600 mb-6 shadow-2xl" id="red-display">🐓</div>
+                            <h3 class="text-4xl font-black text-white truncate mb-1 uppercase" id="red-name">---</h3>
+                            <span class="text-red-600 text-[10px] font-black uppercase tracking-[0.3em]">ฝ่ายแดง</span>
+                        </div>
+                        <div class="flex flex-col items-center shrink-0">
+                            <div id="active-bet" class="text-4xl font-black bet-gradient mb-2 italic tracking-tighter text-center">0 ฿</div>
+                            <div class="text-7xl font-black text-stone-800 italic leading-none mb-6">VS</div>
+                            <div class="bg-stone-950 px-10 py-4 rounded-[2rem] border border-stone-800 shadow-inner text-center">
+                                <span class="text-5xl font-black text-amber-500 leading-none" id="current-round-display">1</span>
+                                <div class="text-[10px] text-stone-600 font-black uppercase mt-1 italic">ยกที่ / <span id="total-rounds-display">--</span></div>
+                            </div>
+                        </div>
+                        <div class="text-center w-full md:w-5/12">
+                            <div class="img-container mx-auto bg-blue-950 rounded-[2.5rem] border-4 border-blue-600 mb-6 shadow-2xl" id="blue-display">🐓</div>
+                            <h3 class="text-4xl font-black text-white truncate mb-1 uppercase" id="blue-name">---</h3>
+                            <span class="text-blue-600 text-[10px] font-black uppercase tracking-[0.3em]">ฝ่ายน้ำเงิน</span>
+                        </div>
+                    </div>
+
+                    <div class="admin-only flex flex-wrap justify-center items-center gap-4 pt-8 border-t border-stone-800/50">
+                        <button onclick="openResultSelection()" class="bg-red-600 hover:bg-red-500 text-white px-10 py-4 rounded-3xl font-black text-lg shadow-xl">🏁 จบการแข่งขัน</button>
+                        <button id="break-btn" onclick="toggleBreak()" class="bg-amber-600 hover:bg-amber-500 text-white px-8 py-4 rounded-3xl font-black text-lg shadow-xl">⏸️ พักยก</button>
+                        <button onclick="showMoveStadium()" class="bg-stone-800 hover:bg-stone-700 text-stone-300 px-8 py-4 rounded-3xl font-black text-lg border border-stone-700 shadow-xl">🔄 ย้ายสังเวียน</button>
+                    </div>
+                </section>
+
+                <section class="bg-stone-900/40 rounded-[2.5rem] p-8 border border-stone-800">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-xl font-bold flex items-center text-stone-400">
+                            <span class="w-1.5 h-6 bg-amber-600 rounded-full mr-3"></span>ลำดับคิวต่อไป
+                        </h2>
+                        <button onclick="nextMatch()" class="admin-only bg-amber-500 text-black px-4 py-2 rounded-xl text-xs font-black">🔔 เริ่มคู่ถัดไป</button>
+                    </div>
+                    <div id="next-matches-list" class="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar"></div>
+                </section>
+            </div>
+
+            <!-- Admin & History Column -->
+            <div class="space-y-6">
+                <div class="admin-only space-y-4">
+                    <div class="bg-stone-900 rounded-[2rem] p-6 border border-stone-800 flex items-center justify-between">
+                        <button onclick="changeRound(-1)" class="w-14 h-14 bg-stone-800 rounded-2xl text-2xl font-black border border-stone-700">-</button>
+                        <div class="text-center"><span class="text-[10px] text-stone-600 font-black">ยกที่</span><span class="text-4xl font-black text-white" id="admin-round-display">1</span></div>
+                        <button onclick="changeRound(1)" class="w-14 h-14 bg-amber-500 text-black rounded-2xl text-2xl font-black shadow-lg">+</button>
+                    </div>
+                    <div class="bg-stone-900 rounded-[2.5rem] p-8 border border-stone-800 shadow-xl">
+                        <h3 class="text-lg font-black text-amber-500 mb-6 italic">เพิ่มคู่ชกใหม่</h3>
+                        <div class="space-y-4">
+                            <div class="flex gap-3">
+                                <div id="preview-red" class="photo-preview shrink-0" onclick="document.getElementById('file-red').click()"><span class="text-xs text-stone-600 font-bold">แดง</span></div>
+                                <input type="file" id="file-red" accept="image/*" class="hidden" onchange="previewImage(this, 'red')">
+                                <input type="text" id="input-red" placeholder="ชื่อไก่ (แดง)" class="w-full bg-stone-800 border border-stone-700 rounded-2xl px-5 py-4 outline-none text-sm">
+                            </div>
+                            <div class="flex gap-3">
+                                <div id="preview-blue" class="photo-preview shrink-0" onclick="document.getElementById('file-blue').click()"><span class="text-xs text-stone-600 font-bold">น้ำเงิน</span></div>
+                                <input type="file" id="file-blue" accept="image/*" class="hidden" onchange="previewImage(this, 'blue')">
+                                <input type="text" id="input-blue" placeholder="ชื่อไก่ (น้ำเงิน)" class="w-full bg-stone-800 border border-stone-700 rounded-2xl px-5 py-4 outline-none text-sm">
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <input type="number" id="input-bet" placeholder="เดิมพัน" class="w-full bg-stone-800 border border-stone-700 rounded-2xl px-5 py-4 outline-none text-sm">
+                                <input type="number" id="input-rounds" placeholder="จำนวนยก" class="w-full bg-stone-800 border border-stone-700 rounded-2xl px-5 py-4 outline-none text-sm">
+                            </div>
+                            <input type="url" id="input-stream" placeholder="ลิงก์ถ่ายทอดสด" class="w-full bg-stone-800 border border-stone-700 rounded-2xl px-5 py-4 outline-none text-sm">
+                            <button onclick="addMatch()" class="w-full bg-white text-black font-black py-5 rounded-[1.5rem] shadow-xl mt-4">บันทึกลงคิว <span id="reg-num">1</span></button>
+                        </div>
+                    </div>
+                </div>
+                <section class="bg-stone-900/60 rounded-[2.5rem] p-8 border border-stone-800 shadow-xl">
+                    <h3 class="text-xs font-black text-amber-500 uppercase tracking-widest mb-6">ผลการแข่งขันล่าสุด</h3>
+                    <div id="history-list" class="space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar"></div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: All Queues (Improved Card View) -->
+    <div id="all-queues-overlay" class="fixed inset-0 z-[150] bg-black/95 flex items-center justify-center modal-blur p-4 hidden">
+        <div class="bg-stone-950 w-full max-w-6xl h-[90vh] flex flex-col rounded-[3rem] border border-stone-800 overflow-hidden shadow-2xl">
+            <div class="p-8 border-b border-stone-800 flex justify-between items-center bg-stone-900/50">
+                <div>
+                    <h2 class="text-3xl font-black text-amber-500 italic uppercase">ตารางรายการวันนี้</h2>
+                    <p class="text-stone-500 text-xs mt-1">คิวการแข่งขันและผลย้อนหลังทุกลานประลอง</p>
+                </div>
+                <button onclick="hideAllQueues()" class="w-14 h-14 flex items-center justify-center rounded-2xl bg-stone-800 text-stone-400 hover:bg-stone-700 transition-colors">✕</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-8 custom-scrollbar bg-stone-950" id="all-queues-content">
+                <!-- Cards will be rendered here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Other Overlays (Result, Reset, Move) - Keep from previous version -->
+    <div id="result-overlay" class="fixed inset-0 z-[120] bg-black/95 flex items-center justify-center modal-blur p-4 hidden">
+        <div class="bg-stone-900 w-full max-w-lg p-8 rounded-[3rem] border border-stone-800 shadow-2xl text-center">
+            <h2 class="text-3xl font-black text-white mb-2 italic">สรุปผลการแข่งขัน</h2>
+            <div class="grid grid-cols-1 gap-4 mt-8">
+                <button onclick="confirmResult('RED')" class="bg-red-600 p-6 rounded-2xl flex justify-between items-center text-white"><span class="text-2xl font-black">🔴 แดงชนะ</span><span id="res-red-name" class="font-bold truncate max-w-[150px]">---</span></button>
+                <button onclick="confirmResult('BLUE')" class="bg-blue-600 p-6 rounded-2xl flex justify-between items-center text-white"><span class="text-2xl font-black">🔵 น้ำเงินชนะ</span><span id="res-blue-name" class="font-bold truncate max-w-[150px]">---</span></button>
+                <button onclick="confirmResult('DRAW')" class="bg-stone-700 p-6 rounded-2xl text-white"><span class="text-2xl font-black">🤝 เสมอ</span></button>
+                <button onclick="hideResult()" class="mt-4 text-stone-500 font-bold">ยกเลิก</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="reset-overlay" class="fixed inset-0 z-[250] bg-black/95 flex items-center justify-center modal-blur p-4 hidden">
+        <div class="bg-stone-900 w-full max-w-md p-10 rounded-[3rem] border border-red-500/30 text-center">
+            <h2 class="text-2xl font-black text-white mb-2 italic text-red-500">ล้างข้อมูลทั้งหมด?</h2>
+            <p class="text-stone-400 text-sm mb-6">ข้อมูลคิวและประวัติวันนี้จะหายไปทั้งหมด</p>
+            <button onclick="executeReset()" class="w-full bg-red-600 text-white font-black py-5 rounded-2xl mb-2">ยืนยันการลบ</button>
+            <button onclick="hideReset()" class="text-stone-500 font-bold py-3">ยกเลิก</button>
+        </div>
+    </div>
+
+    <div id="move-stadium-overlay" class="fixed inset-0 z-[160] bg-black/95 flex items-center justify-center modal-blur p-4 hidden">
+        <div class="bg-stone-900 w-full max-w-md p-8 rounded-[3rem] border border-stone-800">
+            <h2 class="text-2xl font-black text-white mb-4 italic">ย้ายสังเวียน</h2>
+            <div class="grid grid-cols-1 gap-3" id="move-stadium-list"></div>
+            <button onclick="hideMoveStadium()" class="w-full mt-6 text-stone-500 font-bold">ยกเลิก</button>
+        </div>
+    </div>
+
+    <div id="toast" class="fixed bottom-10 left-1/2 -translate-x-1/2 bg-amber-500 text-black px-10 py-4 rounded-full font-black shadow-2xl transition-all opacity-0 pointer-events-none z-[300]"></div>
+
+    <script>
+        const ENC_KEY = "MjQ3NQ==";
+        let isAdmin = false;
+        let stadiums = Array.from({ length: 5 }, (_, i) => ({ id: i + 1, name: `สังเวียน ${i + 1}`, matches: [], currentMatchIndex: -1, currentRound: 1 }));
+        let globalHistory = [];
+        let activeStadiumId = 1;
+        let tempImages = { red: null, blue: null };
+        let sortableInstance = null;
+
+        window.updateLocalData = (data) => {
+            if (data.stadiums) stadiums = data.stadiums;
+            if (data.globalHistory) globalHistory = data.globalHistory;
+            updateUI(false);
+        };
+
+        window.tick = () => {
+            const now = new Date();
+            const dateEl = document.getElementById('current-date');
+            if (dateEl) dateEl.innerText = now.toLocaleString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+            setTimeout(window.tick, 1000);
+        }
+
+        function checkPassword() { 
+            const val = document.getElementById('admin-password').value;
+            if (btoa(val) === ENC_KEY) { 
+                isAdmin = true; document.body.classList.add('logged-in'); 
+                hideLogin(); updateUI(); notify('🔐 เข้าสู่ระบบ Admin สำเร็จ');
+            } else notify('❌ รหัสผ่านไม่ถูกต้อง');
+        }
+
+        function notify(m) { const t = document.getElementById('toast'); if(t) { t.innerText = m; t.style.opacity = 1; setTimeout(() => t.style.opacity = 0, 3000); } }
+
+        function updateUI(shouldSave = true) {
+            const s = stadiums[activeStadiumId - 1];
+            renderTabs();
+            document.getElementById('current-stadium-label').innerText = s.name;
+            document.getElementById('reg-num').innerText = s.id;
+            
+            const m = s.matches[s.currentMatchIndex];
+            const redDisplay = document.getElementById('red-display');
+            const blueDisplay = document.getElementById('blue-display');
+            const statusBadge = document.getElementById('status-badge');
+            const liveStreamArea = document.getElementById('live-stream-area');
+
+            if (m && !m.isFinished) {
+                document.getElementById('red-name').innerText = m.red;
+                document.getElementById('blue-name').innerText = m.blue;
+                document.getElementById('active-bet').innerText = Number(m.bet).toLocaleString() + ' ฿';
+                document.getElementById('current-round-display').innerText = s.currentRound;
+                document.getElementById('admin-round-display').innerText = s.currentRound;
+                document.getElementById('total-rounds-display').innerText = m.totalRounds;
+                document.getElementById('current-match-id').innerText = `MATCH #${m.matchId}`;
+                redDisplay.innerHTML = m.redImg ? `<img src="${m.redImg}" class="w-full h-full object-cover">` : '🐓';
+                blueDisplay.innerHTML = m.blueImg ? `<img src="${m.blueImg}" class="w-full h-full object-cover">` : '🐓';
+                statusBadge.className = "status-live px-3 py-1 rounded-full text-[10px] font-black uppercase";
+                statusBadge.innerText = 'กำลังชก'; statusBadge.classList.remove('hidden');
+                if (m.streamUrl) {
+                    document.getElementById('live-stream-link').href = m.streamUrl;
+                    liveStreamArea.classList.remove('hidden');
+                } else liveStreamArea.classList.add('hidden');
+            } else {
+                ['red-name', 'blue-name'].forEach(id => { const el = document.getElementById(id); if (el) el.innerText = "---"; });
+                document.getElementById('active-bet').innerText = "0 ฿";
+                document.getElementById('current-round-display').innerText = "-";
+                document.getElementById('total-rounds-display').innerText = "--";
+                document.getElementById('current-match-id').innerText = "READY";
+                redDisplay.innerHTML = '🐓'; blueDisplay.innerHTML = '🐓';
+                statusBadge.classList.add('hidden'); liveStreamArea.classList.add('hidden');
+            }
+            renderQueue(s); renderHistory();
+            if (shouldSave && isAdmin) { if (window.saveToCloud) window.saveToCloud({ stadiums, globalHistory }); }
+        }
+
+        function renderTabs() {
+            const container = document.getElementById('stadium-tabs');
+            if (!container) return; container.innerHTML = '';
+            stadiums.forEach(s => {
+                const isActive = activeStadiumId === s.id;
+                const isFighting = s.currentMatchIndex >= 0 && !s.matches[s.currentMatchIndex].isFinished;
+                const btn = document.createElement('button');
+                btn.className = `px-8 py-4 rounded-3xl font-black border-2 shrink-0 transition-all ${isActive ? 'bg-amber-500 text-black border-amber-400 shadow-lg' : 'bg-stone-900 text-stone-600 border-stone-800'}`;
+                btn.innerHTML = `${s.name} ${isFighting ? '<span class="text-red-600 animate-pulse ml-1">●</span>' : ''}`;
+                btn.onclick = () => { activeStadiumId = s.id; updateUI(false); };
+                container.appendChild(btn);
+            });
+        }
+
+        function renderQueue(s) {
+            const qList = document.getElementById('next-matches-list'); if (!qList) return;
+            qList.innerHTML = '';
+            const pending = s.matches.map((m, originalIndex) => ({ ...m, originalIndex })).filter(item => item.originalIndex !== s.currentMatchIndex && !item.isFinished);
+            if (pending.length === 0) { qList.innerHTML = '<p class="text-stone-800 text-center py-10 italic">ไม่มีคิวรอ</p>'; } 
+            else {
+                pending.forEach(m => {
+                    const div = document.createElement('div'); div.setAttribute('data-index', m.originalIndex);
+                    div.className = "bg-stone-800/40 p-5 rounded-[2rem] border border-stone-800 flex justify-between items-center";
+                    div.innerHTML = `<div class="flex items-center gap-4"><div class="drag-handle text-stone-700">⠿</div><div class="flex -space-x-3"><div class="w-12 h-12 rounded-xl border-2 border-red-600 bg-stone-900 overflow-hidden shrink-0">${m.redImg ? `<img src="${m.redImg}" class="w-full h-full object-cover">` : '🐓'}</div><div class="w-12 h-12 rounded-xl border-2 border-blue-600 bg-stone-900 overflow-hidden shrink-0">${m.blueImg ? `<img src="${m.blueImg}" class="w-full h-full object-cover">` : '🐓'}</div></div><div><div class="text-sm font-black text-white">${m.red} VS ${m.blue}</div><div class="text-[10px] font-bold text-amber-500">฿${Number(m.bet).toLocaleString()}</div></div></div>`;
+                    qList.appendChild(div);
+                });
+                if (isAdmin) {
+                    if (sortableInstance) sortableInstance.destroy();
+                    sortableInstance = new Sortable(qList, { animation: 150, handle: '.drag-handle', onEnd: () => {
+                        const items = document.querySelectorAll('#next-matches-list > div');
+                        const newOrder = Array.from(items).map(i => parseInt(i.getAttribute('data-index')));
+                        const finished = s.matches.filter(m => m.isFinished);
+                        const active = s.currentMatchIndex !== -1 ? [s.matches[s.currentMatchIndex]] : [];
+                        const pendingMatches = newOrder.map(idx => s.matches[idx]);
+                        s.matches = [...finished, ...active, ...pendingMatches];
+                        s.currentMatchIndex = active.length ? finished.length : -1; updateUI();
+                    }});
+                }
+            }
+        }
+
+        function showAllQueues() {
+            document.getElementById('all-queues-overlay').classList.remove('hidden');
+            const content = document.getElementById('all-queues-content');
+            content.innerHTML = '';
+
+            stadiums.forEach(s => {
+                const section = document.createElement('div');
+                section.className = "mb-12";
+                section.innerHTML = `
+                    <div class="flex items-center gap-3 mb-6">
+                        <div class="w-1 h-8 bg-amber-500 rounded-full"></div>
+                        <h3 class="text-2xl font-black text-white uppercase italic tracking-tighter">${s.name}</h3>
+                        <span class="text-stone-600 text-xs font-bold ml-auto">${s.matches.length} คู่ของวันนี้</span>
+                    </div>
+                `;
+
+                const grid = document.createElement('div');
+                grid.className = "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4";
+
+                if (s.matches.length === 0) {
+                    grid.innerHTML = `<div class="col-span-full py-8 text-center text-stone-800 text-sm italic">ยังไม่มีรายการแข่งขัน</div>`;
+                } else {
+                    s.matches.forEach((m, idx) => {
+                        const isCurrent = idx === s.currentMatchIndex;
+                        const card = document.createElement('div');
+                        
+                        let statusColor = "border-stone-800 bg-stone-900/40";
+                        let badge = "";
+
+                        if (m.isFinished) {
+                            statusColor = "border-stone-800/50 bg-stone-950 opacity-80";
+                            badge = `<span class="bg-stone-800 text-stone-400 px-3 py-1 rounded-full text-[9px] font-black uppercase">จบการแข่งขัน</span>`;
+                        } else if (isCurrent) {
+                            statusColor = "border-red-600/50 bg-red-950/20 glow-gold";
+                            badge = `<span class="bg-red-600 text-white px-3 py-1 rounded-full text-[9px] font-black uppercase animate-pulse">กำลังแข่งขัน</span>`;
+                        } else {
+                            badge = `<span class="bg-amber-600/20 text-amber-500 px-3 py-1 rounded-full text-[9px] font-black uppercase">รอชก</span>`;
+                        }
+
+                        let resultHtml = "";
+                        if (m.isFinished) {
+                            const resultClass = m.winnerSide === 'RED' ? 'text-red-500' : m.winnerSide === 'BLUE' ? 'text-blue-500' : 'text-stone-400';
+                            resultHtml = `
+                                <div class="mt-4 pt-4 border-t border-stone-800/50 text-center">
+                                    <div class="text-[10px] text-stone-500 font-bold uppercase mb-1">ผลการแข่งขัน</div>
+                                    <div class="text-lg font-black ${resultClass}">${m.winnerLabel} ${m.winnerSide === 'DRAW' ? '' : 'ชนะ'}</div>
+                                    <div class="text-[9px] text-stone-600 font-bold mt-1">จบเกมในยกที่ ${m.winningRound}</div>
+                                </div>
+                            `;
+                        }
+
+                        card.className = `p-6 rounded-[2rem] border-2 ${statusColor} flex flex-col justify-between transition-all`;
+                        card.innerHTML = `
+                            <div class="flex justify-between items-start mb-4">
+                                <span class="text-stone-700 text-[10px] font-black font-mono">คู่ที่ ${idx + 1}</span>
+                                ${badge}
+                            </div>
+                            <div class="flex items-center justify-between gap-4">
+                                <div class="text-center flex-1">
+                                    <div class="w-14 h-14 mx-auto rounded-2xl bg-stone-800 border-2 border-red-600/30 overflow-hidden mb-2">
+                                        ${m.redImg ? `<img src="${m.redImg}" class="w-full h-full object-cover">` : '<div class="h-full flex items-center justify-center text-xl">🐓</div>'}
+                                    </div>
+                                    <div class="text-sm font-black text-white truncate w-full">${m.red}</div>
+                                </div>
+                                <div class="text-stone-800 font-black italic text-xl">VS</div>
+                                <div class="text-center flex-1">
+                                    <div class="w-14 h-14 mx-auto rounded-2xl bg-stone-800 border-2 border-blue-600/30 overflow-hidden mb-2">
+                                        ${m.blueImg ? `<img src="${m.blueImg}" class="w-full h-full object-cover">` : '<div class="h-full flex items-center justify-center text-xl">🐓</div>'}
+                                    </div>
+                                    <div class="text-sm font-black text-white truncate w-full">${m.blue}</div>
+                                </div>
+                            </div>
+                            <div class="mt-4 flex justify-between items-center text-[11px]">
+                                <span class="text-stone-600 font-bold">เดิมพัน: <span class="text-amber-500">฿${Number(m.bet).toLocaleString()}</span></span>
+                                <span class="text-stone-600 font-bold">กำหนด: <span class="text-white">${m.totalRounds} ยก</span></span>
+                            </div>
+                            ${resultHtml}
+                        `;
+                        grid.appendChild(card);
+                    });
+                }
+                section.appendChild(grid);
+                content.appendChild(section);
+            });
+        }
+
+        function hideAllQueues() { document.getElementById('all-queues-overlay').classList.add('hidden'); }
+
+        function addMatch() {
+            if (!isAdmin) return;
+            const s = stadiums[activeStadiumId-1], red = document.getElementById('input-red').value, blue = document.getElementById('input-blue').value;
+            if (!red || !blue) return notify('⚠️ กรุณากรอกชื่อให้ครบ');
+            s.matches.push({ 
+                matchId: Math.floor(1000 + Math.random() * 9000),
+                red, blue, 
+                bet: document.getElementById('input-bet').value || 0, 
+                totalRounds: document.getElementById('input-rounds').value || 3, 
+                redImg: tempImages.red, blueImg: tempImages.blue, 
+                streamUrl: document.getElementById('input-stream').value,
+                isFinished: false, pausedAtRound: 1 
+            });
+            ['input-red', 'input-blue', 'input-bet', 'input-rounds', 'input-stream'].forEach(id => document.getElementById(id).value = '');
+            tempImages = { red: null, blue: null };
+            document.getElementById('preview-red').style.backgroundImage = 'none'; document.getElementById('preview-red').innerHTML = '<span class="text-xs text-stone-600 font-bold">แดง</span>';
+            document.getElementById('preview-blue').style.backgroundImage = 'none'; document.getElementById('preview-blue').innerHTML = '<span class="text-xs text-stone-600 font-bold">น้ำเงิน</span>';
+            updateUI();
+        }
+
+        function nextMatch() {
+            if (!isAdmin) return;
+            const s = stadiums[activeStadiumId-1];
+            const idx = s.matches.findIndex(m => !m.isFinished);
+            if (idx !== -1) { s.currentMatchIndex = idx; s.currentRound = s.matches[idx].pausedAtRound || 1; updateUI(); }
+        }
+
+        function confirmResult(res) {
+            const s = stadiums[activeStadiumId-1], m = s.matches[s.currentMatchIndex];
+            if (!m) return;
+            m.isFinished = true; m.winnerSide = res; 
+            m.winnerLabel = res === 'RED' ? m.red : res === 'BLUE' ? m.blue : 'เสมอ';
+            m.winningRound = s.currentRound;
+            globalHistory.push({ ...m, stadium: s.name, time: new Date().toLocaleTimeString('th-TH') });
+            s.currentMatchIndex = -1;
+            document.getElementById('result-overlay').classList.add('hidden');
+            updateUI();
+        }
+
+        function executeReset() {
+            stadiums = Array.from({ length: 5 }, (_, i) => ({ id: i + 1, name: `สังเวียน ${i + 1}`, matches: [], currentMatchIndex: -1, currentRound: 1 }));
+            globalHistory = []; hideReset(); updateUI();
+        }
+
+        function toggleBreak() {
+            if (!isAdmin || stadiums[activeStadiumId-1].currentMatchIndex === -1) return;
+            const s = stadiums[activeStadiumId-1]; const m = s.matches[s.currentMatchIndex];
+            m.pausedAtRound = s.currentRound;
+            const pending = s.matches.filter((_, i) => i !== s.currentMatchIndex && !_.isFinished);
+            const finished = s.matches.filter(_ => _.isFinished);
+            let newList = [...finished];
+            if (pending.length > 0) { newList.push(pending[0]); newList.push(m); newList.push(...pending.slice(1)); } else { newList.push(m); }
+            s.matches = newList; s.currentMatchIndex = -1; updateUI();
+        }
+
+        function changeRound(v) { if (isAdmin && stadiums[activeStadiumId-1].currentMatchIndex !== -1) { stadiums[activeStadiumId-1].currentRound = Math.max(1, stadiums[activeStadiumId-1].currentRound + v); updateUI(); } }
+        function showReset() { if (isAdmin) document.getElementById('reset-overlay').classList.remove('hidden'); }
+        function hideReset() { document.getElementById('reset-overlay').classList.add('hidden'); }
+        function showLogin() { document.getElementById('login-overlay').classList.remove('hidden'); }
+        function hideLogin() { document.getElementById('login-overlay').classList.add('hidden'); }
+        function logout() { isAdmin = false; document.body.classList.remove('logged-in'); updateUI(false); }
+        function openResultSelection() {
+            const m = stadiums[activeStadiumId-1].matches[stadiums[activeStadiumId-1].currentMatchIndex];
+            if (m) {
+                document.getElementById('res-red-name').innerText = m.red;
+                document.getElementById('res-blue-name').innerText = m.blue;
+                document.getElementById('result-overlay').classList.remove('hidden');
+            }
+        }
+        function hideResult() { document.getElementById('result-overlay').classList.add('hidden'); }
+
+        function previewImage(input, side) {
+            const file = input.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const preview = document.getElementById(`preview-${side}`);
+                    preview.style.backgroundImage = `url('${e.target.result}')`; preview.innerHTML = '';
+                    tempImages[side] = e.target.result;
+                }
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function renderHistory() {
+            const hList = document.getElementById('history-list'); if(!hList) return;
+            hList.innerHTML = '';
+            [...globalHistory].reverse().slice(0, 10).forEach(h => {
+                const div = document.createElement('div');
+                div.className = "p-4 rounded-2xl border border-stone-800 bg-stone-900/40 text-[11px]";
+                div.innerHTML = `<div class="flex justify-between text-[9px] mb-1 text-stone-600 font-black"><span>${h.stadium}</span><span>${h.time}</span></div><div class="font-bold text-white">${h.red} VS ${h.blue}</div><div class="mt-2 text-amber-500 font-black">ชนะ: ${h.winnerLabel} (ยก ${h.winningRound})</div>`;
+                hList.appendChild(div);
+            });
+        }
+
+        function showMoveStadium() {
+            if (!isAdmin || stadiums[activeStadiumId-1].currentMatchIndex === -1) return;
+            const s = stadiums[activeStadiumId-1];
+            const list = document.getElementById('move-stadium-list'); list.innerHTML = '';
+            stadiums.forEach(t => {
+                if (t.id === activeStadiumId) return;
+                const btn = document.createElement('button');
+                btn.className = "p-4 rounded-2xl bg-stone-800 border border-stone-700 text-left hover:bg-stone-700";
+                btn.innerHTML = `<div class="font-black text-white">${t.name}</div><div class="text-[10px] text-stone-500">ย้ายไปต่อท้ายคิว</div>`;
+                btn.onclick = () => {
+                    const m = s.matches.splice(s.currentMatchIndex, 1)[0];
+                    m.pausedAtRound = s.currentRound; t.matches.push(m);
+                    s.currentMatchIndex = -1; hideMoveStadium(); updateUI(); notify(`✅ ย้ายไป ${t.name}`);
+                };
+                list.appendChild(btn);
+            });
+            document.getElementById('move-stadium-overlay').classList.remove('hidden');
+        }
+        function hideMoveStadium() { document.getElementById('move-stadium-overlay').classList.add('hidden'); }
+    </script>
+</body>
+</html>
